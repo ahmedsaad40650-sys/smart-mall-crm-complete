@@ -1,0 +1,74 @@
+version: '3.8'
+
+services:
+  # قاعدة البيانات MongoDB
+  mongodb:
+    image: mongo:7.0
+    container_name: smartmall_mongodb
+    restart: always
+    environment:
+      MONGO_INITDB_DATABASE: smart_mall_crm
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - smartmall_network
+
+  # Backend Flask
+  backend:
+    build:
+      context: ../backend
+      dockerfile: ../docker/Dockerfile.backend
+    container_name: smartmall_backend
+    restart: always
+    environment:
+      - MONGO_URI=mongodb://mongodb:27017/
+      - PORT=5000
+      - DEBUG=False
+    ports:
+      - "5000:5000"
+    depends_on:
+      - mongodb
+    volumes:
+      - ../backend:/app
+    networks:
+      - smartmall_network
+    command: gunicorn --bind 0.0.0.0:5000 --workers 4 --timeout 120 app:app
+
+  # Frontend React
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: ../docker/Dockerfile.frontend
+    container_name: smartmall_frontend
+    restart: always
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - smartmall_network
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: smartmall_nginx
+    restart: always
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - smartmall_network
+
+networks:
+  smartmall_network:
+    driver: bridge
+
+volumes:
+  mongodb_data:
+    driver: local

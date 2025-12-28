@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  # MongoDB Database
+  mongodb:
+    image: mongo:latest
+    container_name: smart-mall-mongo
+    restart: always
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: smartmall2024
+      MONGO_INITDB_DATABASE: smart_mall_crm
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - smart-mall-network
+
+  # Python Backend (Flask)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: smart-mall-backend
+    restart: always
+    ports:
+      - "5000:5000"
+    environment:
+      - MONGO_URI=mongodb://admin:smartmall2024@mongodb:27017/smart_mall_crm?authSource=admin
+      - SECRET_KEY=smart-mall-crm-secret-key-2024
+      - JWT_SECRET_KEY=jwt-secret-key-2024
+      - FLASK_ENV=production
+    depends_on:
+      - mongodb
+    networks:
+      - smart-mall-network
+
+  # React Frontend (Vite)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: smart-mall-frontend
+    restart: always
+    ports:
+      - "80:80"
+    environment:
+      - VITE_API_URL=http://localhost:5000/api
+    depends_on:
+      - backend
+    networks:
+      - smart-mall-network
+
+volumes:
+  mongodb_data:
+    driver: local
+
+networks:
+  smart-mall-network:
+    driver: bridge

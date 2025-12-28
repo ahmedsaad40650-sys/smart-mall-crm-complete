@@ -1,0 +1,29 @@
+# Dockerfile للـ Backend
+FROM python:3.11-slim
+
+# تعيين مجلد العمل
+WORKDIR /app
+
+# تثبيت المتطلبات الأساسية
+RUN apt-get update && apt-get install -y \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# نسخ ملف المتطلبات
+COPY requirements.txt .
+
+# تثبيت المكتبات
+RUN pip install --no-cache-dir -r requirements.txt
+
+# نسخ الكود
+COPY . .
+
+# تعيين المتغيرات البيئية
+ENV PYTHONUNBUFFERED=1
+ENV PORT=5000
+
+# فتح المنفذ
+EXPOSE 5000
+
+# تشغيل التطبيق
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--timeout", "120", "app:app"]
