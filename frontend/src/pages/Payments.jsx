@@ -1,321 +1,448 @@
-import { useEffect, useState } from 'react'
-import api from '../utils/api'
+import { useEffect, useState, useMemo } from 'react'
+import firestoreService from '../services/firestoreService'
 import toast from 'react-hot-toast'
-import { Plus, DollarSign, CreditCard, Calendar, Search, CheckCircle } from 'lucide-react'
+import { 
+  CreditCard, Search, DollarSign, Calendar, Eye, 
+  Download, Filter, ArrowUpRight, ArrowDownRight, Printer, CheckCircle,
+  X, FileText, Wallet, Landmark, History, Receipt, Edit, Trash2
+} from 'lucide-react'
+import { useAuthStore } from '../store/authStore'
+import PermissionGate from '../components/PermissionGate'
+import { useLanguage } from '../i18n/LanguageProvider'
+import { translations } from '../services/translations'
 
-function Payments() {
+// Helper component for modern payment receipt
+const PaymentReceipt = ({ payment, invoice, tenant, onClose }) => {
+  const { currentLanguage: lang } = useLanguage()
+  
+  const handlePrint = () => {
+    window.print()
+  }
+
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal-content-diamond print:shadow-none print:border-none print:bg-white print:text-black" style={{ maxWidth: '550px' }}>
+        
+        {/* Receipt Header */}
+        <div className="modal-header-diamond border-b-0 mb-8">
+          <div>
+            <h2 className="modal-title-diamond" style={{ fontSize: '24px' }}>Smart Mall CRM</h2>
+            <p style={{ fontSize: '11px', color: 'var(--txt3)', textTransform: 'uppercase', letterSpacing: '2px', marginTop: '4px' }}>
+              {lang === 'ar' ? 'إيصال استلام نقدية' : 'Financial Revenue Receipt'}
+            </p>
+          </div>
+          <div style={{ textAlign: lang === 'ar' ? 'left' : 'right' }} className="print:hidden">
+            <button className="modal-close-diamond" onClick={onClose}><X size={20} /></button>
+          </div>
+        </div>
+
+        {/* Receipt Body */}
+        <div className="gg" style={{ padding: '32px', borderRadius: '24px', position: 'relative', marginBottom: '24px' }}>
+           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '32px' }}>
+              <div>
+                 <div style={{ fontSize: '10px', color: 'var(--txt3)', fontWeight: 800, textTransform: 'uppercase', marginBottom: '4px' }}>{lang === 'ar' ? 'بواسطة' : 'RECEIVED FROM'}</div>
+                 <div style={{ fontSize: '18px', fontWeight: 900, color: 'var(--txt)' }}>{tenant?.name || '---'}</div>
+                 <div style={{ fontSize: '12px', color: 'var(--txt3)', marginTop: '2px' }}>{tenant?.business_name || ''}</div>
+              </div>
+              <div style={{ textAlign: lang === 'ar' ? 'left' : 'right' }}>
+                 <div style={{ fontSize: '10px', color: 'var(--txt3)', fontWeight: 800, textTransform: 'uppercase', marginBottom: '4px' }}>{lang === 'ar' ? 'المبلغ' : 'TOTAL AMOUNT'}</div>
+                 <div className="num" style={{ fontSize: '32px', fontWeight: 900, color: 'var(--green)' }}>
+                   {Number(payment.amount).toLocaleString()} <span style={{ fontSize: '14px' }}>ج.م</span>
+                 </div>
+              </div>
+           </div>
+
+           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '32px' }}>
+              <div>
+                 <div style={{ fontSize: '10px', color: 'var(--txt3)', fontWeight: 800, textTransform: 'uppercase', marginBottom: '4px' }}>{lang === 'ar' ? 'طريقة الدفع' : 'METHOD'}</div>
+                 <div style={{ fontWeight: 800 }}>{payment.method === 'cash' ? 'نقدي' : payment.method === 'bank_transfer' ? 'تحويل بنكي' : 'شيك'}</div>
+              </div>
+              <div>
+                 <div style={{ fontSize: '10px', color: 'var(--txt3)', fontWeight: 800, textTransform: 'uppercase', marginBottom: '4px' }}>{lang === 'ar' ? 'المرجع' : 'REFERENCE'}</div>
+                 <div className="num" style={{ fontWeight: 800 }}>{payment.reference || '--'}</div>
+              </div>
+           </div>
+
+           <div style={{ paddingTop: '24px', borderTop: '1px solid var(--bdr)' }}>
+              <div style={{ fontSize: '10px', color: 'var(--txt3)', fontWeight: 800, textTransform: 'uppercase', marginBottom: '8px' }}>{lang === 'ar' ? 'البيان' : 'ALLOCATION'}</div>
+              <div style={{ fontSize: '13px', color: 'var(--txt)', lineHeight: '1.6', fontWeight: 500 }}>
+                {payment.description || (lang === 'ar' ? `دفعة كاملة للفاتورة #${invoice?.invoice_number}` : `Full settlement for Invoice #${invoice?.invoice_number}`)}
+              </div>
+           </div>
+
+           {/* Watermark Logo */}
+           <div style={{ position: 'absolute', bottom: '20px', left: lang === 'ar' ? '20px' : 'auto', right: lang === 'ar' ? 'auto' : '20px', opacity: 0.05 }}>
+              <Receipt size={80} />
+           </div>
+        </div>
+
+        {/* Modal Actions */}
+        <div style={{ display: 'flex', gap: '12px' }} className="print:hidden">
+          <button className="ftb" style={{ flex: 1, height: '44px' }} onClick={onClose}>{lang === 'ar' ? 'إغلاق' : 'Close'}</button>
+          <button className="btn" style={{ flex: 2, height: '44px', display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'center' }} onClick={handlePrint}>
+            <Printer size={18} />
+            {lang === 'ar' ? 'طباعة الإيصال' : 'Print Protocol'}
+          </button>
+        </div>
+
+        <div className="hidden print:block text-center mt-8 pt-6 border-t border-gray-100 text-gray-400 text-[10px] uppercase tracking-widest">
+          Digitally Signed & Verified System Receipt • Smart Mall CRM v2.1
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export default function Payments() {
+  const { user } = useAuthStore()
+  const { currentLanguage: lang } = useLanguage()
+  const t = translations[lang]
+
   const [payments, setPayments] = useState([])
   const [invoices, setInvoices] = useState([])
   const [tenants, setTenants] = useState([])
   const [loading, setLoading] = useState(true)
-  const [showModal, setShowModal] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
-
-  const [formData, setFormData] = useState({
-    invoice_id: '',
-    tenant_id: '',
-    amount: '',
-    payment_method: 'cash',
-    payment_date: new Date().toISOString().split('T')[0],
-    transaction_id: '',
-    notes: ''
+  const [filterMethod, setFilterMethod] = useState('all')
+  const [dateRange, setDateRange] = useState('all')
+  const [selectedReceipt, setSelectedReceipt] = useState(null)
+  const [editingPayment, setEditingPayment] = useState(null)
+  const [showEditModal, setShowEditModal] = useState(false)
+  const [editFormData, setEditFormData] = useState({
+    amount: '', method: 'cash', reference: '', description: ''
   })
 
   useEffect(() => {
-    fetchPayments()
-    fetchInvoices()
-    fetchTenants()
-  }, [])
+    if (user) fetchData()
+  }, [user])
 
-  const fetchPayments = async () => {
+  const fetchData = async () => {
     try {
-      const response = await api.get('/payments')
-      setPayments(response.data.payments || [])
+      setLoading(true)
+      const filters = []
+      if (user?.role?.toLowerCase() === 'tenant') {
+        filters.push({ field: 'tenantId', operator: '==', value: user.id })
+      }
+      
+      const [paymentsData, invoicesData, tenantsData] = await Promise.all([
+        firestoreService.getAll('payments', filters),
+        firestoreService.getAll('invoices'),
+        firestoreService.getAll('tenants')
+      ])
+
+      setPayments(paymentsData?.sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt)) || [])
+      setInvoices(invoicesData || [])
+      setTenants(tenantsData || [])
     } catch (error) {
-      toast.error('فشل تحميل المدفوعات')
+      console.error('Error loading payments:', error)
+      toast.error(lang === 'ar' ? 'حدث خطأ في تحميل المدفوعات' : 'Failed to load payments')
     } finally {
       setLoading(false)
     }
   }
 
-  const fetchInvoices = async () => {
-    try {
-      const response = await api.get('/invoices?status=pending')
-      setInvoices(response.data.invoices || [])
-    } catch (error) {
-      console.error('Error fetching invoices:', error)
-    }
-  }
-
-  const fetchTenants = async () => {
-    try {
-      const response = await api.get('/tenants')
-      setTenants(response.data.tenants || [])
-    } catch (error) {
-      console.error('Error fetching tenants:', error)
-    }
-  }
-
-  const handleSubmit = async (e) => {
-    e.preventDefault()
-
-    try {
-      await api.post('/payments', formData)
-      toast.success('تم تسجيل الدفعة بنجاح')
-      setShowModal(false)
-      resetForm()
-      fetchPayments()
-      fetchInvoices() // Refresh to update pending invoices
-    } catch (error) {
-      toast.error(error.response?.data?.error || 'حدث خطأ')
-    }
-  }
-
-  const resetForm = () => {
-    setFormData({
-      invoice_id: '',
-      tenant_id: '',
-      amount: '',
-      payment_method: 'cash',
-      payment_date: new Date().toISOString().split('T')[0],
-      transaction_id: '',
-      notes: ''
+  const handleEdit = (payment) => {
+    setEditingPayment(payment)
+    setEditFormData({
+      amount: payment.amount || '',
+      method: payment.method || 'cash',
+      reference: payment.reference || '',
+      description: payment.description || ''
     })
+    setShowEditModal(true)
   }
 
-  const getTenantName = (tenantId) => {
-    const tenant = tenants.find(t => t.id === tenantId)
-    return tenant ? tenant.name : 'غير معروف'
-  }
-
-  const getInvoiceNumber = (invoiceId) => {
-    const invoice = [...invoices, ...payments.map(p => ({ id: p.invoice_id }))].find(i => i.id === invoiceId)
-    return invoice ? invoice.invoice_number || invoiceId : 'غير معروف'
-  }
-
-  const getPaymentMethodLabel = (method) => {
-    const labels = {
-      cash: 'نقدي',
-      bank_transfer: 'تحويل بنكي',
-      credit_card: 'بطاقة ائتمان',
-      check: 'شيك'
+  const handleEditSubmit = async (e) => {
+    e.preventDefault()
+    try {
+      await firestoreService.update('payments', editingPayment.id, {
+        amount: parseFloat(editFormData.amount),
+        method: editFormData.method,
+        reference: editFormData.reference,
+        description: editFormData.description,
+        updatedAt: new Date().toISOString()
+      })
+      toast.success(lang === 'ar' ? 'تم تعديل الدفعة بنجاح' : 'Payment updated successfully')
+      setShowEditModal(false)
+      setEditingPayment(null)
+      fetchData()
+    } catch (error) {
+      toast.error(lang === 'ar' ? 'خطأ في تعديل الدفعة' : 'Failed to update payment')
     }
-    return labels[method] || method
   }
 
-  const filteredPayments = payments.filter(payment =>
-    getTenantName(payment.tenant_id).toLowerCase().includes(searchTerm.toLowerCase()) ||
-    payment.payment_number.toLowerCase().includes(searchTerm.toLowerCase())
-  )
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-96">
-        <div className="w-12 h-12 border-4 border-primary-500 border-t-transparent rounded-full animate-spin" />
-      </div>
-    )
+  const handleDelete = async (id) => {
+    if (!window.confirm(lang === 'ar' ? 'هل أنت متأكد من حذف هذه الدفعة؟ لا يمكن التراجع عن هذا الإجراء.' : 'Are you sure you want to delete this payment? This action cannot be undone.')) return
+    try {
+      await firestoreService.delete('payments', id)
+      toast.success(lang === 'ar' ? 'تم حذف الدفعة بنجاح' : 'Payment deleted successfully')
+      fetchData()
+    } catch (error) {
+      toast.error(lang === 'ar' ? 'خطأ في حذف الدفعة' : 'Failed to delete payment')
+    }
   }
+
+  const getTenantName = (id) => tenants.find(t => t.id === id)?.name || (lang === 'ar' ? 'غير معروف' : 'Unknown')
+  const getInvoiceNumber = (id) => invoices.find(i => i.id === id)?.invoice_number || '--'
+
+  const filteredPayments = useMemo(() => {
+    let result = payments
+    if (searchTerm) {
+      result = result.filter(p => 
+        getTenantName(p.tenantId).toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (p.reference || '').toLowerCase().includes(searchTerm.toLowerCase())
+      )
+    }
+    if (filterMethod !== 'all') {
+      result = result.filter(p => p.method === filterMethod)
+    }
+    if (dateRange !== 'all') {
+      const now = new Date()
+      const d = new Date()
+      if (dateRange === 'month') d.setMonth(now.getMonth() - 1)
+      if (dateRange === 'week') d.setDate(now.getDate() - 7)
+      if (dateRange === 'today') d.setHours(0,0,0,0)
+      result = result.filter(p => new Date(p.createdAt) >= d)
+    }
+    return result
+  }, [payments, searchTerm, filterMethod, dateRange, tenants])
+
+  const stats = useMemo(() => {
+    const total = filteredPayments.reduce((acc, p) => acc + (Number(p.amount) || 0), 0)
+    const count = filteredPayments.length
+    const cash = filteredPayments.filter(p => p.method === 'cash').reduce((acc, p) => acc + (Number(p.amount) || 0), 0)
+    const bank = filteredPayments.filter(p => p.method === 'bank_transfer').reduce((acc, p) => acc + (Number(p.amount) || 0), 0)
+    return { total, count, cash, bank }
+  }, [filteredPayments])
+
+  const exportToCSV = () => {
+    const headers = lang === 'ar' 
+      ? ['التاريخ', 'المستأجر', 'رقم الفاتورة', 'المبلغ', 'طريقة الدفع', 'المرجع', 'البيان']
+      : ['Date', 'Tenant', 'Invoice No', 'Amount', 'Method', 'Reference', 'Description']
+      
+    const data = filteredPayments.map(p => [
+      new Date(p.createdAt).toLocaleDateString('ar-EG'),
+      getTenantName(p.tenantId),
+      getInvoiceNumber(p.invoiceId),
+      p.amount,
+      p.method === 'cash' ? 'نقدي' : p.method === 'bank_transfer' ? 'بنكي' : 'شيك',
+      p.reference || '',
+      p.description || ''
+    ])
+
+    const csvContent = [
+      headers.join(','),
+      ...data.map(row => row.map(cell => `"${cell}"`).join(','))
+    ].join('\n')
+
+    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' })
+    const link = document.createElement('a')
+    const url = URL.createObjectURL(blob)
+    link.setAttribute('href', url)
+    link.setAttribute('download', `payments_${new Date().toISOString().split('T')[0]}.csv`)
+    link.style.visibility = 'hidden'
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  }
+
+  if (loading) return <div className="flex items-center justify-center min-h-[400px]"><div className="spinner" /></div>
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900">المدفوعات</h1>
-          <p className="text-gray-600 mt-1">تسجيل ومتابعة المدفوعات</p>
+    <div className="fu">
+      {/* Page Header */}
+      <div className="ph" style={{ justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          <div className="phi gg" style={{ background: 'linear-gradient(135deg, var(--gold), #f0c040)', color: '#000' }}>
+            <Wallet size={24} />
+          </div>
+          <div>
+            <h2>{t.payments_page.title}</h2>
+            <span>{t.payments_page.subtitle}</span>
+          </div>
         </div>
-
-        <button
-          onClick={() => {
-            resetForm()
-            setShowModal(true)
-          }}
-          className="btn-primary flex items-center gap-2"
-        >
-          <Plus size={20} />
-          تسجيل دفعة جديدة
-        </button>
+        <PermissionGate action="payments.export">
+          <button className="btn" onClick={exportToCSV}>
+            <Download size={16} style={{ marginLeft: lang === 'ar' ? '8px' : '0', marginRight: lang === 'ar' ? '0' : '8px' }} />
+            {lang === 'ar' ? 'تصدير التقرير' : 'Export Ledger'}
+          </button>
+        </PermissionGate>
       </div>
 
-      <div className="card">
-        <div className="relative">
-          <Search className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={20} />
-          <input
-            type="text"
-            placeholder="البحث برقم الدفعة أو اسم المستأجر..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="input-field pr-10"
+      {/* Stats Overview */}
+      <div className="sg" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+        <div className="sc bl gc">
+          <div className="si2"><History /></div>
+          <div className="sv num">{(stats.total / 1000).toFixed(1)}K</div>
+          <div className="sl">{t.payments_page.total_payments}</div>
+        </div>
+        <div className="sc pu gc">
+          <div className="si2"><Receipt /></div>
+          <div className="sv num">{stats.count}</div>
+          <div className="sl">{lang === 'ar' ? 'عدد الحركات' : 'Txn Count'}</div>
+        </div>
+        <div className="sc gn gc">
+          <div className="si2"><DollarSign /></div>
+          <div className="sv num">{(stats.cash / 1000).toFixed(1)}K</div>
+          <div className="sl">{lang === 'ar' ? 'تحصيلات نقدية' : 'Cash Collected'}</div>
+        </div>
+        <div className="sc or gc">
+          <div className="si2"><Landmark /></div>
+          <div className="sv num">{(stats.bank / 1000).toFixed(1)}K</div>
+          <div className="sl">{lang === 'ar' ? 'تحويلات بنكية' : 'Bank Transfers'}</div>
+        </div>
+      </div>
+
+      {/* Search & Filters */}
+      <div className="gc" style={{ padding: '16px', marginBottom: '16px', display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
+        <div className="hs" style={{ flex: 1, minWidth: '250px' }}>
+          <Search size={16} />
+          <input 
+            type="text" 
+            placeholder={lang === 'ar' ? 'البحث باسم المستأجر أو المرجع...' : 'Search tenant or reference...'} 
+            value={searchTerm} 
+            onChange={e => setSearchTerm(e.target.value)} 
           />
         </div>
-      </div>
-
-      <div className="grid grid-cols-1 gap-4">
-        {filteredPayments.map((payment) => (
-          <div key={payment.id} className="card hover:shadow-lg transition-shadow">
-            <div className="flex items-start justify-between">
-              <div className="flex items-center gap-4 flex-1">
-                <div className="w-12  h-12 bg-green-100 rounded-lg flex items-center justify-center">
-                  <DollarSign className="text-green-600" size={24} />
-                </div>
-                <div className="flex-1">
-                  <div className="flex items-center gap-3 mb-2">
-                    <h3 className="font-bold text-lg text-gray-900">{payment.payment_number}</h3>
-                    <span className="badge badge-success">
-                      <CheckCircle size={14} />
-                      مكتملة
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                    <div>
-                      <p className="text-sm text-gray-500">المستأجر</p>
-                      <p className="font-medium">{getTenantName(payment.tenant_id)}</p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-500">المبلغ</p>
-                      <p className="font-medium text-green-600">{payment.amount.toLocaleString()} ريال</p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-500">طريقة الدفع</p>
-                      <p className="font-medium">{getPaymentMethodLabel(payment.payment_method)}</p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-500">التاريخ</p>
-                      <p className="font-medium">{new Date(payment.payment_date).toLocaleDateString('ar-SA')}</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {filteredPayments.length === 0 && (
-        <div className="text-center py-12">
-          <DollarSign className="mx-auto text-gray-400 mb-4" size={64} />
-          <p className="text-gray-600">لا توجد مدفوعات</p>
+        <div className="ft">
+          {['all', 'cash', 'bank_transfer'].map(s => (
+            <button 
+              key={s} 
+              className={`ftb ${filterMethod === s ? 'active' : ''}`} 
+              onClick={() => setFilterMethod(s)}
+            >
+              {{ all: t.common.all, cash: lang === 'ar' ? 'نقدي' : 'Cash', bank_transfer: lang === 'ar' ? 'بنكي' : 'Bank' }[s]}
+            </button>
+          ))}
         </div>
+        <div className="ft">
+          {['all', 'today', 'week', 'month'].map(s => (
+            <button 
+              key={s} 
+              className={`ftb ${dateRange === s ? 'active' : ''}`} 
+              onClick={() => setDateRange(s)}
+            >
+              {{ all: lang === 'ar' ? 'كل الوقت' : 'All Time', today: lang === 'ar' ? 'اليوم' : 'Today', week: lang === 'ar' ? 'أسبوع' : 'Week', month: lang === 'ar' ? 'شهر' : 'Month' }[s]}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Table Container */}
+      <div className="gc" style={{ overflow: 'hidden' }}>
+        <table className="dt">
+          <thead>
+            <tr>
+              <th>{t.fields.date}</th>
+              <th>{t.payments_page.tenant}</th>
+              <th>{t.payments_page.amount}</th>
+              <th>{t.payments_page.method}</th>
+              <th>{lang === 'ar' ? 'الفاتورة' : 'Invoice'}</th>
+              <th>{t.fields.description}</th>
+              <th style={{ textAlign: 'center' }}>{t.fields.actions}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredPayments.map(payment => (
+              <tr key={payment.id}>
+                <td className="num" style={{ fontSize: '11px' }}>
+                  {new Date(payment.createdAt).toLocaleString(lang === 'ar' ? 'ar-EG' : 'en-US', { dateStyle: 'short', timeStyle: 'short' })}
+                </td>
+                <td style={{ fontWeight: 600 }}>{getTenantName(payment.tenantId)}</td>
+                <td className="num" style={{ fontWeight: 800, color: 'var(--green)' }}>{Number(payment.amount).toLocaleString()}</td>
+                <td>
+                  <span className={`bs ${payment.method === 'cash' ? 'active' : 'warn'}`}>
+                    {payment.method === 'cash' ? (lang === 'ar' ? 'نقدي' : 'Cash') : (lang === 'ar' ? 'بنكي' : 'Bank')}
+                  </span>
+                </td>
+                <td className="num" style={{ fontWeight: 700, color: 'var(--gold)' }}>#{getInvoiceNumber(payment.invoiceId)}</td>
+                <td style={{ fontSize: '11px', color: 'var(--txt3)', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {payment.description || '--'}
+                </td>
+                <td>
+                  <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
+                    <button className="hb" onClick={() => setSelectedReceipt(payment)} title={lang === 'ar' ? 'عرض الإيصال' : 'View Receipt'}>
+                       <Eye size={14} />
+                    </button>
+                    <PermissionGate action="payments.edit">
+                      <button className="hb" style={{ color: 'var(--blue)' }} onClick={() => handleEdit(payment)} title={lang === 'ar' ? 'تعديل' : 'Edit'}>
+                        <Edit size={14} />
+                      </button>
+                    </PermissionGate>
+                    <PermissionGate action="payments.delete">
+                      <button className="hb" style={{ color: 'var(--red)' }} onClick={() => handleDelete(payment.id)} title={lang === 'ar' ? 'حذف' : 'Delete'}>
+                        <Trash2 size={14} />
+                      </button>
+                    </PermissionGate>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {filteredPayments.length === 0 && (
+          <div className="empty-state">
+            <div className="empty-state-icon"><DollarSign /></div>
+            <div className="empty-state-text">{t.messages.no_data}</div>
+          </div>
+        )}
+      </div>
+
+      {selectedReceipt && (
+        <PaymentReceipt 
+          payment={selectedReceipt} 
+          invoice={invoices.find(i => i.id === selectedReceipt.invoiceId)}
+          tenant={tenants.find(t => t.id === selectedReceipt.tenantId)}
+          onClose={() => setSelectedReceipt(null)}
+        />
       )}
 
-      {/* Modal تسجيل دفعة */}
-      {showModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6">
-            <h2 className="text-2xl font-bold mb-6">تسجيل دفعة جديدة</h2>
-
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="label">الفاتورة</label>
-                  <select
-                    value={formData.invoice_id}
-                    onChange={(e) => {
-                      const invoice = invoices.find(inv => inv.id === e.target.value)
-                      setFormData({
-                        ...formData,
-                        invoice_id: e.target.value,
-                        tenant_id: invoice ? invoice.tenant_id : '',
-                        amount: invoice ? invoice.total_amount.toString() : ''
-                      })
-                    }}
-                    className="input-field"
-                    required
-                  >
-                    <option value="">اختر الفاتورة</option>
-                    {invoices.map(invoice => (
-                      <option key={invoice.id} value={invoice.id}>
-                        {invoice.invoice_number} - {invoice.total_amount.toLocaleString()} ريال
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="label">المستأجر</label>
-                  <select
-                    value={formData.tenant_id}
-                    onChange={(e) => setFormData({ ...formData, tenant_id: e.target.value })}
-                    className="input-field"
-                    required
-                    disabled
-                  >
-                    <option value="">اختر المستأجر</option>
-                    {tenants.map(tenant => (
-                      <option key={tenant.id} value={tenant.id}>{tenant.name}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="label">المبلغ (ريال)</label>
-                  <input
-                    type="number"
-                    value={formData.amount}
-                    onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
-                    className="input-field"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="label">طريقة الدفع</label>
-                  <select
-                    value={formData.payment_method}
-                    onChange={(e) => setFormData({ ...formData, payment_method: e.target.value })}
-                    className="input-field"
-                  >
-                    <option value="cash">نقدي</option>
-                    <option value="bank_transfer">تحويل بنكي</option>
-                    <option value="credit_card">بطاقة ائتمان</option>
-                    <option value="check">شيك</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="label">تاريخ الدفع</label>
-                  <input
-                    type="date"
-                    value={formData.payment_date}
-                    onChange={(e) => setFormData({ ...formData, payment_date: e.target.value })}
-                    className="input-field"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="label">رقم المعاملة (اختياري)</label>
-                  <input
-                    type="text"
-                    value={formData.transaction_id}
-                    onChange={(e) => setFormData({ ...formData, transaction_id: e.target.value })}
-                    className="input-field"
-                  />
-                </div>
-              </div>
-
+      {/* Edit Payment Modal */}
+      {showEditModal && editingPayment && (
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && (setShowEditModal(false), setEditingPayment(null))}>
+          <div className="modal-content-diamond" style={{ maxWidth: '550px' }}>
+            <div className="modal-header-diamond">
               <div>
-                <label className="label">ملاحظات</label>
-                <textarea
-                  value={formData.notes}
-                  onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                  className="input-field"
-                  rows="3"
-                />
+                <h3 className="modal-title-diamond">{lang === 'ar' ? 'تعديل الدفعة' : 'Edit Payment'}</h3>
+                <p style={{ fontSize: '10px', color: 'var(--gold)', textTransform: 'uppercase', letterSpacing: '2px', fontWeight: 900, marginTop: '4px' }}>
+                  {lang === 'ar' ? 'تحديث بيانات الدفعة المالية' : 'Update Financial Transaction'}
+                </p>
+              </div>
+              <button className="modal-close-diamond" onClick={() => { setShowEditModal(false); setEditingPayment(null) }}><X size={20} /></button>
+            </div>
+
+            <form onSubmit={handleEditSubmit} style={{ padding: '0 10px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
+                <div>
+                  <label className="label">{lang === 'ar' ? 'المبلغ (ج.م)' : 'Amount (EGP)'}</label>
+                  <input type="number" className="input-field num" value={editFormData.amount} onChange={e => setEditFormData({...editFormData, amount: e.target.value})} required />
+                </div>
+                <div>
+                  <label className="label">{lang === 'ar' ? 'طريقة الدفع' : 'Method'}</label>
+                  <select className="input-field" value={editFormData.method} onChange={e => setEditFormData({...editFormData, method: e.target.value})} required>
+                    <option value="cash">{lang === 'ar' ? 'نقدي' : 'Cash'}</option>
+                    <option value="bank_transfer">{lang === 'ar' ? 'تحويل بنكي' : 'Bank Transfer'}</option>
+                    <option value="cheque">{lang === 'ar' ? 'شيك' : 'Cheque'}</option>
+                  </select>
+                </div>
               </div>
 
-              <div className="flex gap-3 pt-4">
-                <button type="submit" className="flex-1 btn-primary">
-                  تسجيل الدفعة
+              <div style={{ marginBottom: '20px' }}>
+                <label className="label">{lang === 'ar' ? 'المرجع' : 'Reference'}</label>
+                <input className="input-field" value={editFormData.reference} onChange={e => setEditFormData({...editFormData, reference: e.target.value})} />
+              </div>
+
+              <div style={{ marginBottom: '24px' }}>
+                <label className="label">{lang === 'ar' ? 'البيان / الوصف' : 'Description'}</label>
+                <textarea className="input-field" style={{ minHeight: '80px', resize: 'none' }} value={editFormData.description} onChange={e => setEditFormData({...editFormData, description: e.target.value})} />
+              </div>
+
+              <div style={{ display: 'flex', gap: '12px' }}>
+                <button type="button" className="ftb" style={{ flex: 1, height: '44px' }} onClick={() => { setShowEditModal(false); setEditingPayment(null) }}>
+                  {lang === 'ar' ? 'إلغاء' : 'Cancel'}
                 </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowModal(false)
-                    resetForm()
-                  }}
-                  className="flex-1 btn-secondary"
-                >
-                  إلغاء
+                <button type="submit" className="btn" style={{ flex: 2, height: '44px' }}>
+                  {lang === 'ar' ? 'حفظ التعديلات' : 'Save Changes'}
                 </button>
               </div>
             </form>
@@ -325,5 +452,3 @@ function Payments() {
     </div>
   )
 }
-
-export default Payments

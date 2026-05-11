@@ -1,17 +1,38 @@
-import { useEffect, useState } from 'react'
-import api from '../utils/api'
+import { useEffect, useState, useMemo } from 'react'
+import firestoreService from '../services/firestoreService'
+import storageService from '../services/storageService'
 import toast from 'react-hot-toast'
-import { Plus, FileText, Calendar, DollarSign, Search } from 'lucide-react'
+import { 
+  Plus, FileText, Calendar, DollarSign, Search, Paperclip, Eye, Download, 
+  Edit, Trash2, ShieldCheck, Briefcase, User, Building, Clock, X,
+  FileCheck, AlertTriangle, FileSignature, ChevronDown, ChevronUp
+} from 'lucide-react'
+import FileUpload from '../components/FileUpload'
+import VoiceInput from '../components/VoiceInput'
+import { useAuthStore } from '../store/authStore'
+import PermissionGate from '../components/PermissionGate'
+import { useLanguage } from '../i18n/LanguageProvider'
+import { translations } from '../services/translations'
 
-function Contracts() {
+export default function Contracts() {
+  const { user } = useAuthStore()
+  const { currentLanguage } = useLanguage()
+  const lang = currentLanguage
+  const t = translations[lang]
+
   const [contracts, setContracts] = useState([])
   const [tenants, setTenants] = useState([])
   const [units, setUnits] = useState([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
+  const [editingContract, setEditingContract] = useState(null)
   const [searchTerm, setSearchTerm] = useState('')
-
-  const [formData, setFormData] = useState({
+  const [filterStatus, setFilterStatus] = useState('all')
+  const [uploadedFiles, setUploadedFiles] = useState([])
+  const [expandedContract, setExpandedContract] = useState(null)
+  const [attachments, setAttachments] = useState({})
+  
+  const initialForm = {
     tenant_id: '',
     unit_id: '',
     start_date: '',
@@ -21,20 +42,29 @@ function Contracts() {
     payment_day: 1,
     terms: '',
     notes: ''
-  })
+  }
+
+  const [formData, setFormData] = useState(initialForm)
+
+  const tempContractId = useMemo(() => {
+    return editingContract?.id || `temp-${Date.now()}`
+  }, [editingContract, showModal])
 
   useEffect(() => {
-    fetchContracts()
-    fetchTenants()
-    fetchUnits()
-  }, [])
+    if (user) {
+      fetchContracts()
+      fetchTenants()
+      fetchUnits()
+    }
+  }, [user])
 
   const fetchContracts = async () => {
     try {
-      const response = await api.get('/contracts')
-      setContracts(response.data.contracts || [])
+      setLoading(true)
+      const data = await firestoreService.getAll('contracts')
+      setContracts(data || [])
     } catch (error) {
-      toast.error('فشل تحميل العقود')
+      toast.error(lang === 'ar' ? 'فشل تحميل العقود' : 'Failed to load contracts')
     } finally {
       setLoading(false)
     }
@@ -42,8 +72,8 @@ function Contracts() {
 
   const fetchTenants = async () => {
     try {
-      const response = await api.get('/tenants')
-      setTenants(response.data.tenants || [])
+      const data = await firestoreService.getAll('tenants')
+      setTenants(data || [])
     } catch (error) {
       console.error('Error fetching tenants:', error)
     }
@@ -51,273 +81,377 @@ function Contracts() {
 
   const fetchUnits = async () => {
     try {
-      const response = await api.get('/units?status=available')
-      setUnits(response.data.units || [])
+      // Show available units + the one currently in editing contract
+      const data = await firestoreService.getAll('units')
+      setUnits(data || [])
     } catch (error) {
       console.error('Error fetching units:', error)
     }
   }
 
+  const fetchAttachments = async (contractId) => {
+    try {
+      const files = await storageService.listFolder(`contracts/${contractId}`)
+      setAttachments(prev => ({
+        ...prev,
+        [contractId]: files || []
+      }))
+    } catch (error) {
+      console.error('Error fetching attachments:', error)
+    }
+  }
+
+  const toggleExpand = async (contractId) => {
+    if (expandedContract === contractId) {
+      setExpandedContract(null)
+    } else {
+      setExpandedContract(contractId)
+      if (!attachments[contractId]) {
+        await fetchAttachments(contractId)
+      }
+    }
+  }
+
   const handleSubmit = async (e) => {
     e.preventDefault()
-
     try {
-      await api.post('/contracts', formData)
-      toast.success('تم إنشاء العقد بنجاح')
+      let contractId = editingContract?.id
+      const payload = {
+        ...formData,
+        updated_at: new Date().toISOString()
+      }
+
+      if (editingContract) {
+        await firestoreService.update('contracts', editingContract.id, payload)
+        toast.success(lang === 'ar' ? 'تم تحديث العقد بنجاح' : 'Contract updated')
+      } else {
+        const contract_number = `CON-${Date.now().toString().slice(-6)}`
+        contractId = await firestoreService.create('contracts', {
+          ...payload,
+          contract_number,
+          status: 'active',
+          created_at: new Date().toISOString()
+        })
+        // Update unit status
+        if (formData.unit_id) {
+          await firestoreService.update('units', formData.unit_id, { status: 'rented' })
+        }
+        toast.success(lang === 'ar' ? 'تم إنشاء العقد بنجاح' : 'Contract created')
+      }
+
+      // Handle file migration if needed (simplified here)
       setShowModal(false)
       resetForm()
       fetchContracts()
-      fetchUnits() // Refresh to update available units
     } catch (error) {
-      toast.error(error.response?.data?.error || 'حدث خطأ')
+      toast.error(lang === 'ar' ? 'حدث خطأ أثناء حفظ البيانات' : 'Error saving data')
+    }
+  }
+
+  const handleEdit = (contract) => {
+    setEditingContract(contract)
+    setFormData({
+      tenant_id: contract.tenant_id,
+      unit_id: contract.unit_id,
+      start_date: contract.start_date?.split('T')[0] || '',
+      end_date: contract.end_date?.split('T')[0] || '',
+      monthly_rent: contract.monthly_rent,
+      deposit: contract.deposit,
+      payment_day: contract.payment_day,
+      terms: contract.terms || '',
+      notes: contract.notes || ''
+    })
+    setShowModal(true)
+  }
+
+  const handleDelete = async (id) => {
+    if (!window.confirm(lang === 'ar' ? 'هل أنت متأكد من حذف هذا العقد؟' : 'Delete this contract?')) return
+    try {
+      const contract = contracts.find(c => c.id === id)
+      await firestoreService.delete('contracts', id)
+      if (contract?.unit_id) {
+        await firestoreService.update('units', contract.unit_id, { status: 'available' })
+      }
+      toast.success(lang === 'ar' ? 'تم الحذف بنجاح' : 'Deleted')
+      fetchContracts()
+    } catch (error) {
+      toast.error(lang === 'ar' ? 'فشل الحذف' : 'Delete failed')
     }
   }
 
   const resetForm = () => {
-    setFormData({
-      tenant_id: '',
-      unit_id: '',
-      start_date: '',
-      end_date: '',
-      monthly_rent: '',
-      deposit: '',
-      payment_day: 1,
-      terms: '',
-      notes: ''
-    })
+    setFormData(initialForm)
+    setEditingContract(null)
+    setUploadedFiles([])
   }
 
   const getTenantName = (tenantId) => {
     const tenant = tenants.find(t => t.id === tenantId)
-    return tenant ? tenant.name : 'غير معروف'
+    return tenant ? tenant.name : (lang === 'ar' ? 'غير معروف' : 'Unknown')
   }
 
   const getUnitNumber = (unitId) => {
-    const unit = [...units, ...contracts.map(c => ({ id: c.unit_id }))].find(u => u.id === unitId)
-    return unit ? `وحدة ${unit.unit_number || unitId}` : 'غير معروف'
+    const unit = units.find(u => u.id === unitId)
+    return unit ? unit.unit_number : '—'
   }
 
-  const filteredContracts = contracts.filter(contract =>
-    getTenantName(contract.tenant_id).toLowerCase().includes(searchTerm.toLowerCase()) ||
-    contract.contract_number.toLowerCase().includes(searchTerm.toLowerCase())
-  )
+  const filteredContracts = contracts.filter(contract => {
+    const name = getTenantName(contract.tenant_id).toLowerCase()
+    const num = (contract.contract_number || '').toLowerCase()
+    const matchesSearch = name.includes(searchTerm.toLowerCase()) || num.includes(searchTerm.toLowerCase())
+    const matchesStatus = filterStatus === 'all' || contract.status === filterStatus
+    return matchesSearch && matchesStatus
+  })
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-96">
-        <div className="w-12 h-12 border-4 border-primary-500 border-t-transparent rounded-full animate-spin" />
-      </div>
-    )
+  const stats = {
+    total: contracts.length,
+    active: contracts.filter(c => c.status === 'active').length,
+    expired: contracts.filter(c => c.status === 'expired').length
   }
+
+  if (loading) return <div className="flex items-center justify-center min-h-[400px]"><div className="spinner" /></div>
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900">العقود</h1>
-          <p className="text-gray-600 mt-1">إدارة عقود الإيجار</p>
+    <div className="fu">
+      {/* Page Header */}
+      <div className="ph" style={{ justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          <div className="phi gg" style={{ background: 'linear-gradient(135deg, var(--gold), #f0c040)', color: '#000' }}>
+            <FileSignature size={24} />
+          </div>
+          <div>
+            <h2>{t.contracts_page.title}</h2>
+            <span>{t.contracts_page.subtitle}</span>
+          </div>
         </div>
-
-        <button
-          onClick={() => {
-            resetForm()
-            setShowModal(true)
-          }}
-          className="btn-primary flex items-center gap-2"
-        >
-          <Plus size={20} />
-          إضافة عقد جديد
-        </button>
+        <PermissionGate action="contracts.create">
+          <button className="btn" onClick={() => { resetForm(); setShowModal(true) }}>
+            <Plus size={16} style={{ marginLeft: lang === 'ar' ? '8px' : '0', marginRight: lang === 'ar' ? '0' : '8px' }} />
+            {t.contracts_page.add_contract}
+          </button>
+        </PermissionGate>
       </div>
 
-      <div className="card">
-        <div className="relative">
-          <Search className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={20} />
-          <input
-            type="text"
-            placeholder="البحث برقم العقد أو اسم المستأجر..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="input-field pr-10"
+      {/* Stats Overview */}
+      <div className="sg" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+        <div className="sc bl gc">
+          <div className="si2"><FileText /></div>
+          <div className="sv num">{stats.total}</div>
+          <div className="sl">{t.contracts_page.total_contracts}</div>
+        </div>
+        <div className="sc gn gc">
+          <div className="si2"><FileCheck /></div>
+          <div className="sv num">{stats.active}</div>
+          <div className="sl">{t.status.active}</div>
+        </div>
+        <div className="sc rd gc">
+          <div className="si2"><AlertTriangle /></div>
+          <div className="sv num">{stats.expired}</div>
+          <div className="sl">{t.status.expired}</div>
+        </div>
+      </div>
+
+      {/* Search & Filters */}
+      <div className="gc" style={{ padding: '16px', marginBottom: '16px', display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
+        <div className="hs" style={{ flex: 1, minWidth: '250px' }}>
+          <Search size={16} />
+          <input 
+            type="text" 
+            placeholder={t.contracts_page.search_placeholder} 
+            value={searchTerm} 
+            onChange={e => setSearchTerm(e.target.value)} 
           />
         </div>
-      </div>
-
-      <div className="grid grid-cols-1 gap-4">
-        {filteredContracts.map((contract) => (
-          <div key={contract.id} className="card hover:shadow-lg transition-shadow">
-            <div className="flex items-start justify-between">
-              <div className="flex items-center gap-4 flex-1">
-                <div className="w-12 h-12 bg-primary-100 rounded-lg flex items-center justify-center">
-                  <FileText className="text-primary-600" size={24} />
-                </div>
-                <div className="flex-1">
-                  <div className="flex items-center gap-3 mb-2">
-                    <h3 className="font-bold text-lg text-gray-900">{contract.contract_number}</h3>
-                    <span className={`badge ${contract.status === 'active' ? 'badge-success' : 'badge-warning'}`}>
-                      {contract.status === 'active' ? 'نشط' : contract.status === 'expired' ? 'منتهي' : 'ملغي'}
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                    <div>
-                      <p className="text-sm text-gray-500">المستأجر</p>
-                      <p className="font-medium">{getTenantName(contract.tenant_id)}</p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-500">الوحدة</p>
-                      <p className="font-medium">{getUnitNumber(contract.unit_id)}</p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-500">الإيجار الشهري</p>
-                      <p className="font-medium text-primary-600">{contract.monthly_rent.toLocaleString()} ريال</p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-500">المدة</p>
-                      <p className="font-medium">{new Date(contract.start_date).toLocaleDateString('ar-SA')} - {new Date(contract.end_date).toLocaleDateString('ar-SA')}</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {filteredContracts.length === 0 && (
-        <div className="text-center py-12">
-          <FileText className="mx-auto text-gray-400 mb-4" size={64} />
-          <p className="text-gray-600">لا توجد عقود</p>
+        <div className="ft">
+          {['all', 'active', 'expired'].map(s => (
+            <button 
+              key={s} 
+              className={`ftb ${filterStatus === s ? 'active' : ''}`} 
+              onClick={() => setFilterStatus(s)}
+            >
+              {s === 'all' ? t.common.all : t.status[s]}
+            </button>
+          ))}
         </div>
-      )}
+      </div>
 
-      {/* Modal إضافة عقد */}
+      {/* Table Container */}
+      <div className="gc" style={{ overflow: 'hidden' }}>
+        <table className="dt">
+          <thead>
+            <tr>
+              <th>{t.contracts_page.contract_number}</th>
+              <th>{t.payments_page.tenant}</th>
+              <th>{t.tenants_page.unit}</th>
+              <th>{lang === 'ar' ? 'الإيجار' : 'Rent'}</th>
+              <th>{t.contracts_page.start_date}</th>
+              <th>{t.contracts_page.end_date}</th>
+              <th>{t.fields.status}</th>
+              <th style={{ textAlign: 'center' }}>{t.fields.actions}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredContracts.map(contract => (
+              <>
+                <tr key={contract.id}>
+                  <td className="num" style={{ fontWeight: 800 }}>{contract.contract_number}</td>
+                  <td style={{ fontWeight: 600 }}>{getTenantName(contract.tenant_id)}</td>
+                  <td className="num">{getUnitNumber(contract.unit_id)}</td>
+                  <td className="num" style={{ color: 'var(--green)', fontWeight: 800 }}>{Number(contract.monthly_rent).toLocaleString()}</td>
+                  <td className="num" style={{ fontSize: '11px' }}>{new Date(contract.start_date).toLocaleDateString(lang === 'ar' ? 'ar-EG' : 'en-US')}</td>
+                  <td className="num" style={{ fontSize: '11px' }}>{new Date(contract.end_date).toLocaleDateString(lang === 'ar' ? 'ar-EG' : 'en-US')}</td>
+                  <td>
+                    <span className={`bs ${contract.status === 'active' ? 'active' : 'expired'}`}>
+                      {t.status[contract.status] || contract.status}
+                    </span>
+                  </td>
+                  <td>
+                    <div style={{ display: 'flex', justifyContent: 'center', gap: '6px' }}>
+                      <button className="hb" onClick={() => toggleExpand(contract.id)}>
+                        {expandedContract === contract.id ? <ChevronUp size={14} /> : <Eye size={14} />}
+                      </button>
+                      <PermissionGate action="contracts.edit" resource={contract}>
+                        <button className="hb" style={{ color: 'var(--blue)' }} onClick={() => handleEdit(contract)}><Edit size={14} /></button>
+                      </PermissionGate>
+                      <PermissionGate action="contracts.delete" resource={contract}>
+                        <button className="hb" style={{ color: 'var(--red)' }} onClick={() => handleDelete(contract.id)}><Trash2 size={14} /></button>
+                      </PermissionGate>
+                    </div>
+                  </td>
+                </tr>
+                {expandedContract === contract.id && (
+                  <tr className="fu">
+                    <td colSpan="8" style={{ padding: '0 20px 20px' }}>
+                      <div className="gg" style={{ padding: '24px', borderRadius: '16px', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--bdr)' }}>
+                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', marginBottom: '24px' }}>
+                            <div>
+                               <label className="label" style={{ opacity: 0.5 }}>{t.contracts_page.deposit}</label>
+                               <div className="num" style={{ fontWeight: 800 }}>{Number(contract.deposit).toLocaleString()} ج.م</div>
+                            </div>
+                            <div>
+                               <label className="label" style={{ opacity: 0.5 }}>{t.contracts_page.payment_day}</label>
+                               <div style={{ fontWeight: 800 }}>{lang === 'ar' ? `يوم ${contract.payment_day} من كل شهر` : `Day ${contract.payment_day} of month`}</div>
+                            </div>
+                            <div>
+                               <label className="label" style={{ opacity: 0.5 }}>{t.contracts_page.terms}</label>
+                               <div style={{ fontSize: '12px', color: 'var(--txt2)' }}>{contract.terms || '—'}</div>
+                            </div>
+                         </div>
+                         {attachments[contract.id]?.length > 0 && (
+                           <div>
+                              <div style={{ fontSize: '11px', fontWeight: 800, color: 'var(--gold)', marginBottom: '12px', textTransform: 'uppercase' }}>📎 {t.contracts_page.attachments}</div>
+                              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                                {attachments[contract.id].map(file => (
+                                  <button key={file.id} className="ni" style={{ padding: '8px 16px', borderRadius: '10px', background: 'rgba(212,175,55,0.1)', border: '1px solid rgba(212,175,55,0.2)', color: 'var(--gold)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }} onClick={() => window.open(file.url, '_blank')}>
+                                    <Paperclip size={14} />
+                                    <span style={{ fontSize: '11px', fontWeight: 700 }}>{file.original_name || file.name}</span>
+                                    <Download size={12} />
+                                  </button>
+                                ))}
+                              </div>
+                           </div>
+                         )}
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </>
+            ))}
+          </tbody>
+        </table>
+        {filteredContracts.length === 0 && (
+          <div className="empty-state">
+            <div className="empty-state-icon"><FileText /></div>
+            <div className="empty-state-text">{t.messages.no_data}</div>
+          </div>
+        )}
+      </div>
+
+      {/* Modal */}
       {showModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6">
-            <h2 className="text-2xl font-bold mb-6">إضافة عقد جديد</h2>
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && (setShowModal(false), resetForm())}>
+          <div className="modal-content-diamond" style={{ maxWidth: '800px' }}>
+            <div className="modal-header-diamond">
+              <div>
+                <h3 className="modal-title-diamond">{editingContract ? t.common.edit : t.contracts_page.add_contract}</h3>
+                <p style={{ fontSize: '10px', color: 'var(--txt3)', textTransform: 'uppercase', letterSpacing: '2px', marginTop: '4px' }}>Legal Protocol</p>
+              </div>
+              <button className="modal-close-diamond" onClick={() => { setShowModal(false); resetForm() }}><X size={20} /></button>
+            </div>
 
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <form onSubmit={handleSubmit}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
                 <div>
-                  <label className="label">المستأجر</label>
-                  <select
-                    value={formData.tenant_id}
-                    onChange={(e) => setFormData({ ...formData, tenant_id: e.target.value })}
-                    className="input-field"
-                    required
-                  >
-                    <option value="">اختر المستأجر</option>
-                    {tenants.map(tenant => (
-                      <option key={tenant.id} value={tenant.id}>{tenant.name}</option>
-                    ))}
+                  <label className="label">{t.payments_page.tenant}</label>
+                  <select className="input-field" value={formData.tenant_id} onChange={e => setFormData({ ...formData, tenant_id: e.target.value })} required>
+                    <option value="">{t.payments_page.select_tenant}</option>
+                    {tenants.map(tn => <option key={tn.id} value={tn.id}>{tn.name}</option>)}
                   </select>
                 </div>
-
                 <div>
-                  <label className="label">الوحدة</label>
-                  <select
-                    value={formData.unit_id}
-                    onChange={(e) => setFormData({ ...formData, unit_id: e.target.value })}
-                    className="input-field"
-                    required
-                  >
-                    <option value="">اختر الوحدة</option>
-                    {units.map(unit => (
-                      <option key={unit.id} value={unit.id}>وحدة {unit.unit_number} - {unit.rental_price} ريال</option>
-                    ))}
+                  <label className="label">{t.tenants_page.unit}</label>
+                  <select className="input-field" value={formData.unit_id} onChange={e => setFormData({ ...formData, unit_id: e.target.value })} required>
+                    <option value="">{t.tenants_page.select_unit}</option>
+                    {units.map(u => <option key={u.id} value={u.id}>{u.unit_number} - {u.floor}</option>)}
                   </select>
                 </div>
-
                 <div>
-                  <label className="label">تاريخ البداية</label>
-                  <input
-                    type="date"
-                    value={formData.start_date}
-                    onChange={(e) => setFormData({ ...formData, start_date: e.target.value })}
-                    className="input-field"
-                    required
-                  />
+                  <label className="label">{t.contracts_page.start_date}</label>
+                  <input type="date" className="input-field" value={formData.start_date} onChange={e => setFormData({ ...formData, start_date: e.target.value })} required />
                 </div>
-
                 <div>
-                  <label className="label">تاريخ النهاية</label>
-                  <input
-                    type="date"
-                    value={formData.end_date}
-                    onChange={(e) => setFormData({ ...formData, end_date: e.target.value })}
-                    className="input-field"
-                    required
-                  />
+                  <label className="label">{t.contracts_page.end_date}</label>
+                  <input type="date" className="input-field" value={formData.end_date} onChange={e => setFormData({ ...formData, end_date: e.target.value })} required />
                 </div>
-
                 <div>
-                  <label className="label">الإيجار الشهري (ريال)</label>
-                  <input
-                    type="number"
-                    value={formData.monthly_rent}
-                    onChange={(e) => setFormData({ ...formData, monthly_rent: e.target.value })}
-                    className="input-field"
-                    required
-                  />
+                  <label className="label">{lang === 'ar' ? 'الإيجار الشهري' : 'Monthly Rent'}</label>
+                  <input type="number" className="input-field num" value={formData.monthly_rent} onChange={e => setFormData({ ...formData, monthly_rent: e.target.value })} required />
                 </div>
-
                 <div>
-                  <label className="label">التأمين (ريال)</label>
-                  <input
-                    type="number"
-                    value={formData.deposit}
-                    onChange={(e) => setFormData({ ...formData, deposit: e.target.value })}
-                    className="input-field"
-                    required
-                  />
+                  <label className="label">{t.contracts_page.deposit}</label>
+                  <input type="number" className="input-field num" value={formData.deposit} onChange={e => setFormData({ ...formData, deposit: e.target.value })} required />
                 </div>
-
                 <div>
-                  <label className="label">يوم الدفع الشهري</label>
-                  <input
-                    type="number"
-                    min="1"
-                    max="31"
-                    value={formData.payment_day}
-                    onChange={(e) => setFormData({ ...formData, payment_day: e.target.value })}
-                    className="input-field"
-                  />
+                  <label className="label">{t.contracts_page.payment_day}</label>
+                  <input type="number" min="1" max="31" className="input-field num" value={formData.payment_day} onChange={e => setFormData({ ...formData, payment_day: e.target.value })} required />
+                </div>
+                <div>
+                  <label className="label">{t.fields.status}</label>
+                  <select className="input-field" value={formData.status} onChange={e => setFormData({ ...formData, status: e.target.value })}>
+                    <option value="active">{t.status.active}</option>
+                    <option value="expired">{t.status.expired}</option>
+                    <option value="cancelled">{t.status.cancelled}</option>
+                  </select>
                 </div>
               </div>
 
-              <div>
-                <label className="label">الشروط والأحكام</label>
-                <textarea
-                  value={formData.terms}
-                  onChange={(e) => setFormData({ ...formData, terms: e.target.value })}
-                  className="input-field"
-                  rows="3"
-                />
+              <div style={{ marginBottom: '20px' }}>
+                <label className="label">{t.contracts_page.terms}</label>
+                <div style={{ position: 'relative' }}>
+                  <textarea 
+                    className="input-field" 
+                    style={{ minHeight: '80px', resize: 'none' }} 
+                    value={formData.terms} 
+                    onChange={e => setFormData({ ...formData, terms: e.target.value })} 
+                  />
+                  <div style={{ position: 'absolute', left: '10px', bottom: '10px' }}>
+                    <VoiceInput onTranscript={text => setFormData(p => ({ ...p, terms: p.terms + ' ' + text }))} size="sm" />
+                  </div>
+                </div>
               </div>
 
-              <div>
-                <label className="label">ملاحظات</label>
-                <textarea
-                  value={formData.notes}
-                  onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                  className="input-field"
-                  rows="2"
-                />
+              <div style={{ marginBottom: '24px' }}>
+                <label className="label">📎 {t.contracts_page.attachments}</label>
+                <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px dashed var(--bdr)', borderRadius: '16px', padding: '20px' }}>
+                  <FileUpload referenceType="contract" referenceId={tempContractId} onFilesUploaded={files => setUploadedFiles(files)} />
+                </div>
               </div>
 
-              <div className="flex gap-3 pt-4">
-                <button type="submit" className="flex-1 btn-primary">
-                  إنشاء العقد
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowModal(false)
-                    resetForm()
-                  }}
-                  className="flex-1 btn-secondary"
-                >
-                  إلغاء
+              <div style={{ display: 'flex', gap: '12px' }}>
+                <button type="button" className="ftb" style={{ flex: 1, height: '44px' }} onClick={() => { setShowModal(false); resetForm() }}>{t.common.cancel}</button>
+                <button type="submit" className="btn" style={{ flex: 2, height: '44px' }}>
+                  <FileCheck size={16} style={{ marginLeft: lang === 'ar' ? '8px' : '0', marginRight: lang === 'ar' ? '0' : '8px' }} />
+                  {editingContract ? t.common.save : t.contracts_page.add_contract}
                 </button>
               </div>
             </form>
@@ -327,5 +461,3 @@ function Contracts() {
     </div>
   )
 }
-
-export default Contracts
