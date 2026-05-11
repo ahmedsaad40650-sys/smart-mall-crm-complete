@@ -15,7 +15,8 @@ build/
 *.log
 
 # IDE
-.vscode/
+.vscode/*
+!.vscode/settings.json
 .idea/
 *.swp
 *.swo

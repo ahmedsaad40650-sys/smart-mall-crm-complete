@@ -1,29 +1,19 @@
-# Dockerfile للـ Backend
-FROM python:3.11-slim
+# Dockerfile.backend مبسط وجاهز للشغل
+FROM python:3.11-bullseye
 
-# تعيين مجلد العمل
+# إعداد مجلد العمل
 WORKDIR /app
 
-# تثبيت المتطلبات الأساسية
-RUN apt-get update && apt-get install -y \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
-
-# نسخ ملف المتطلبات
-COPY requirements.txt .
-
-# تثبيت المكتبات
-RUN pip install --no-cache-dir -r requirements.txt
-
-# نسخ الكود
+# نسخ ملفات المشروع
 COPY . .
 
-# تعيين المتغيرات البيئية
-ENV PYTHONUNBUFFERED=1
-ENV PORT=5000
+# تحديث pip وتثبيت المتطلبات
+RUN pip install --upgrade pip setuptools wheel \
+    && pip install --no-cache-dir -r requirements.txt
 
-# فتح المنفذ
+# تحديد المنفذ اللي هيتواصل عليه backend
 EXPOSE 5000
 
-# تشغيل التطبيق
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--timeout", "120", "app:app"]
+# أمر التشغيل الرئيسي للـ backend
+CMD ["python", "app.py"]
+
